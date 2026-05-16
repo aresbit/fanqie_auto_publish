@@ -29,3 +29,6 @@ Thumbs.db
 build/
 dist/
 *.spec
+
+# uv 工具链
+uv.lock

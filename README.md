@@ -3,6 +3,23 @@
 这是一个基于 `Playwright` 的强大的番茄小说全自动网页端发文与状态管理自动化脚本。
 它能在完全无人值守的情况下，将本地批量的 `.txt` 章节文件精准投递并发布到番茄作家后台，且自带极其强悍的“断点续检”与“弹窗斩杀”机制。
 
+运行方式
+
+# GUI 版本（pywebview 窗口）
+uv run python main_webview.py
+
+# CLI 版本
+uv run python publish.py
+
+# 登录
+uv run python login.py
+
+# 辅助脚本
+uv run python rename.py
+uv run python deai_process.py
+uv run python add_text.py
+uv run python convert_icon.py
+
 ## 核心特性 ✨
 
 - **智能断点续传**：意外中断后重启脚本，不会傻傻地重复创建章节，而是会进入【章节管理】自动识别未完成的残片草稿并继续覆盖发布。
