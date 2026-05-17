@@ -13,6 +13,60 @@ STATE_FILE = "state.json"
 CONFIG_FILE = "config.json"
 BOOK_MANAGE_URL = "https://fanqienovel.com/main/writer/book-manage"
 
+
+def md_to_plain_text(md_content: str) -> str:
+    """将 Markdown 内容转换为纯文本，适合番茄小说编辑器。"""
+    lines = md_content.split('\n')
+    result = []
+
+    for line in lines:
+        # 去掉图片 ![alt](url)
+        line = re.sub(r'!\[.*?\]\(.*?\)', '', line)
+        # 链接 [text](url) -> text
+        line = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', line)
+        # 行内代码 `code`
+        line = re.sub(r'`([^`]*)`', r'\1', line)
+        # 粗体/斜体标记 ** **, __ __, * *, _ _
+        line = re.sub(r'\*\*([^*]+)\*\*', r'\1', line)
+        line = re.sub(r'__([^_]+)__', r'\1', line)
+        line = re.sub(r'\*([^*]+)\*', r'\1', line)
+        line = re.sub(r'_([^_]+)_', r'\1', line)
+        # 删除线 ~~text~~
+        line = re.sub(r'~~([^~]+)~~', r'\1', line)
+
+        # 标题行 # ## ### ... -> 只保留文字
+        stripped = line.strip()
+        if re.match(r'^#{1,6}\s', stripped):
+            line = re.sub(r'^#{1,6}\s+', '', stripped)
+            result.append(line)
+            continue
+
+        # 水平线
+        if re.match(r'^[-*_]{3,}\s*$', stripped):
+            continue
+
+        # 引用块
+        if stripped.startswith('> '):
+            line = re.sub(r'^>\s?', '', stripped)
+            result.append(line)
+            continue
+
+        # 无序列表
+        if re.match(r'^[-*+]\s', stripped):
+            line = re.sub(r'^[-*+]\s+', '', stripped)
+            result.append(line)
+            continue
+
+        # 有序列表
+        if re.match(r'^\d+\.\s', stripped):
+            line = re.sub(r'^\d+\.\s+', '', stripped)
+            result.append(line)
+            continue
+
+        result.append(stripped if stripped else '')
+
+    return '\n'.join(result)
+
 class Api:
     def __init__(self):
         self.window = None
@@ -106,7 +160,7 @@ class Api:
         return (1, raw_title.casefold())
 
     def get_books(self):
-        """Scan source_dir for books and txt files"""
+        """Scan source_dir for books and txt/md files"""
         books = []
         source_dir = self.config.get('source_dir')
         if not source_dir or not os.path.isdir(source_dir):
@@ -115,10 +169,12 @@ class Api:
             sub_path = os.path.join(source_dir, name)
             if os.path.isdir(sub_path):
                 txts = glob.glob(os.path.join(sub_path, "*.txt"))
-                if txts:
+                mds = glob.glob(os.path.join(sub_path, "*.md"))
+                chapters = sorted(txts + mds, key=self._chapter_file_sort_key)
+                if chapters:
                     books.append({
                         "name": name,
-                        "count": len(txts),
+                        "count": len(chapters),
                         "published_volumes": self._get_published_volume_count(name)
                     })
         return books
@@ -143,7 +199,7 @@ class Api:
                 child_path = os.path.join(book_archive_path, child)
                 if os.path.isdir(child_path):
                     child_dirs.append(child)
-                elif os.path.isfile(child_path) and child.lower().endswith(".txt"):
+                elif os.path.isfile(child_path) and (child.lower().endswith(".txt") or child.lower().endswith(".md")):
                     txt_files += 1
 
             # If no explicit volume folder exists but txt files are archived directly,
@@ -210,28 +266,40 @@ class Api:
         return True
 
 
+    @staticmethod
+    def _open_path(path):
+        """跨平台打开文件/目录。"""
+        import platform, subprocess
+        system = platform.system()
+        if system == 'Windows':
+            os.startfile(path)
+        elif system == 'Darwin':
+            subprocess.run(['open', path], check=False)
+        else:
+            subprocess.run(['xdg-open', path], check=False)
+
     def open_source_folder(self):
-        """Open the source drafts folder in Windows File Explorer"""
+        """Open the source drafts folder"""
         try:
             target_dir = self.config.get('source_dir')
             if not target_dir:
                 self.log("没有配置待发草稿目录！", "text-red-400")
                 return
             os.makedirs(target_dir, exist_ok=True)
-            os.startfile(target_dir)
+            self._open_path(target_dir)
             self.log(f"已为您打开本地草稿来源目录：{target_dir}", "text-green-300")
         except Exception as e:
             self.log(f"打开源码目录失败: {e}", "text-red-500")
 
     def open_data_folder(self):
-        """Open the uploaded records folder in Windows File Explorer"""
+        """Open the uploaded records folder"""
         try:
             target_dir = self.config.get('archive_dir')
             if not target_dir:
                 self.log("没有配置归档目录！", "text-red-400")
                 return
             os.makedirs(target_dir, exist_ok=True)
-            os.startfile(target_dir)
+            self._open_path(target_dir)
             self.log(f"已为您打开本地归档文件目录：{target_dir}", "text-blue-300")
         except Exception as e:
             self.log(f"打开目录失败: {e}", "text-red-500")
@@ -248,9 +316,11 @@ class Api:
                 self.log("【严重拦截】未设置待发存档位置！发文进程被强制中止。", "text-red-500 font-bold")
                 return False
 
-            # Fetch txt files
+            # Fetch txt and md files
             sub_path = os.path.join(source_dir, book_name_filter)
             txts = sorted(glob.glob(os.path.join(sub_path, "*.txt")), key=self._chapter_file_sort_key)
+            mds = sorted(glob.glob(os.path.join(sub_path, "*.md")), key=self._chapter_file_sort_key)
+            txts = sorted(txts + mds, key=self._chapter_file_sort_key)
             if publish_count is not None and publish_count > 0:
                 txts = txts[:publish_count]
             queue_preview = " -> ".join(os.path.splitext(os.path.basename(path))[0] for path in txts[:10])
@@ -311,13 +381,18 @@ class Api:
                             lines = f.readlines()
                         first_line = lines[0].strip() if lines else ""
 
-                        if not chapter_num and first_line:
-                            m_num = re.search(r'第\s*(\d+)\s*章', first_line)
+                        # 对于 .md 文件，先把标题行的 markdown 语法洗掉再提取章节信息
+                        first_line_clean = first_line
+                        if first_line_clean.startswith('#') and file_path.lower().endswith('.md'):
+                            first_line_clean = re.sub(r'^#{1,6}\s+', '', first_line_clean)
+
+                        if not chapter_num and first_line_clean:
+                            m_num = re.search(r'第\s*(\d+)\s*章', first_line_clean)
                             if m_num:
                                 chapter_num = str(m_num.group(1))
-                            
-                        if not chapter_title and first_line:
-                            m2 = re.search(r'第\s*\d+\s*章[\s：:]*(.*)', first_line)
+
+                        if not chapter_title and first_line_clean:
+                            m2 = re.search(r'第\s*\d+\s*章[\s：:]*(.*)', first_line_clean)
                             if m2:
                                 chapter_title = m2.group(1).strip()
                         if not chapter_title:
@@ -330,6 +405,10 @@ class Api:
                         while lines and not lines[0].strip():
                             lines = lines[1:]
                         content = "".join(lines)
+
+                        # 对于 .md 文件，将 Markdown 内容转换为纯文本后再注入编辑器
+                        if file_path.lower().endswith('.md'):
+                            content = md_to_plain_text(content)
                         
                         try:
                             self.log(" -> 跳跃回空间站【我的小说】总览...")
@@ -414,7 +493,8 @@ class Api:
                             for _ in range(10):
                                 clicked_guide = False
                                 try:
-                                    for target_text in ["下一步", "完成", "我知道了", "跳过"]:
+                                    # 不包含"下一步"：与顶部真实发布按钮文字相同，误触会提前跳转
+                                    for target_text in ["完成", "我知道了", "跳过"]:
                                         btns = editor_page.get_by_text(target_text, exact=True).element_handles()
                                         for btn in btns:
                                             box = btn.bounding_box()
@@ -499,18 +579,40 @@ class Api:
                             if editor.is_visible():
                                 self._dismiss_platform_popups(editor_page, wait_ms=500)
                                 editor_handle = editor.element_handle()
+                                # 方案1: ClipboardEvent paste 模拟（ProseMirror paste handler）
                                 editor_page.evaluate("""([el, text]) => {
                                     el.focus();
-                                    el.innerText = "";
-                                    el.innerText = text;
-                                    el.dispatchEvent(new Event('input', {bubbles: true}));
-                                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                                    const range = document.createRange();
+                                    range.selectNodeContents(el);
+                                    const sel = window.getSelection();
+                                    sel.removeAllRanges();
+                                    sel.addRange(range);
+                                    const dt = new DataTransfer();
+                                    dt.setData('text/plain', text);
+                                    el.dispatchEvent(new ClipboardEvent('paste', {
+                                        clipboardData: dt, bubbles: true, cancelable: true
+                                    }));
                                 }""", [editor_handle, content])
-                                editor.click()
-                                editor_page.keyboard.press("End")
-                                editor_page.keyboard.press("Space")
-                                page.wait_for_timeout(500)
-                                editor_page.keyboard.press("Backspace")
+                                editor_page.wait_for_timeout(800)
+
+                                # 验证注入，失败则降级 execCommand
+                                actual = (editor.inner_text() or "").strip()
+                                if not actual:
+                                    editor_page.evaluate("""([el, text]) => {
+                                        el.focus();
+                                        document.execCommand('selectAll', false, null);
+                                        document.execCommand('delete', false, null);
+                                        document.execCommand('insertText', false, text);
+                                    }""", [editor_handle, content])
+                                    editor_page.wait_for_timeout(500)
+
+                                # 最终兜底
+                                if not (editor.inner_text() or "").strip():
+                                    editor_page.evaluate("""([el, text]) => {
+                                        el.innerText = text;
+                                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                                    }""", [editor_handle, content])
                             else:
                                 self.log("  [错误] 检测不到输入核心区域！", "text-red-500")
                                 
@@ -520,9 +622,18 @@ class Api:
                             if next_btn.is_visible():
                                 next_btn.click(force=True)
                                 editor_page.wait_for_timeout(2000)
-                                
+
+                                # 处理"请选择内容检测方式"弹窗 → 选"仅基础检测"
+                                try:
+                                    basic_btn = editor_page.get_by_text("仅基础检测", exact=True).first
+                                    if basic_btn.is_visible(timeout=3000):
+                                        basic_btn.click(force=True)
+                                        self.log(" -> 已选择【仅基础检测】", "text-gray-400")
+                                        editor_page.wait_for_timeout(2000)
+                                except: pass
+
                                 publish_success = False
-                                for attempt in range(15):  # 尝试总时长大约15秒
+                                for attempt in range(20):  # 尝试总时长约20秒
                                     # 尝试点击AI选项
                                     try:
                                         ai_no_label = editor_page.get_by_text("否", exact=True).first

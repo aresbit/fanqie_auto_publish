@@ -1,14 +1,15 @@
 import os, glob, re, sys
 
 chapters_dir = r"e:\A_project\Demo\小说\fanqie_auto_publish\chapters"
-files = glob.glob(os.path.join(chapters_dir, "*.txt"))
+files = glob.glob(os.path.join(chapters_dir, "*.txt")) + glob.glob(os.path.join(chapters_dir, "*.md"))
 
 num_map = {"一": "1", "二": "2", "三": "3", "四": "4", "五": "5", "六": "6", "七": "7", "八": "8", "九": "9", "十": "10"}
 
 for f in files:
     try:
         basename = os.path.basename(f)
-        m = re.match(r'^(\d+)\s+第([一二三四五六七八九十]+)章\.txt$', basename)
+        ext = os.path.splitext(basename)[1]  # .txt or .md
+        m = re.match(r'^(\d+)\s+第([一二三四五六七八九十]+)章\.(txt|md)$', basename)
         if m:
             prefix = m.group(1)
             chn_num = m.group(2)
@@ -29,7 +30,7 @@ for f in files:
             
             title = re.sub(r'[\\/*?:"<>|]', "", title)
             
-            new_name = f"{prefix}_第{arabic}章 {title}.txt"
+            new_name = f"{prefix}_第{arabic}章 {title}{ext}"
             new_path = os.path.join(chapters_dir, new_name)
             
             with open(new_path, 'w', encoding='utf-8') as file:

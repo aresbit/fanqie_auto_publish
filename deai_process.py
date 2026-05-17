@@ -74,7 +74,7 @@ def process_chapters():
     total_changes = 0
     processed = 0
     for filename in files:
-        if not filename.endswith('.txt'):
+        if not (filename.endswith('.txt') or filename.endswith('.md')):
             continue
         chapter_num = get_chapter_num(filename)
         if chapter_num < 4 or chapter_num > 25:
@@ -83,7 +83,8 @@ def process_chapters():
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
         modified, changes = apply_replacements(content)
-        new_filename = f"{chapter_num:03d} 第{chapter_num}章.txt"
+        ext = os.path.splitext(filename)[1]
+        new_filename = f"{chapter_num:03d} 第{chapter_num}章{ext}"
         output_path = os.path.join(OUTPUT_DIR, new_filename)
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(modified)

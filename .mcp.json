@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "fanqie-publish": {
+      "command": "python",
+      "args": ["mcp_server.py"],
+      "cwd": "/home/ares/ares/llm/fanqie_auto_publish",
+      "env": {}
+    }
+  }
+}

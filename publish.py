@@ -9,6 +9,78 @@ STATE_FILE = "state.json"
 CHAPTERS_DIR = "chapters"
 UPLOADED_DIR = "uploaded"
 
+
+def md_to_plain_text(md_content: str) -> str:
+    """将 Markdown 内容转换为纯文本，适合番茄小说编辑器。"""
+    lines = md_content.split('\n')
+    result = []
+
+    for line in lines:
+        # 去掉图片 ![alt](url)
+        line = re.sub(r'!\[.*?\]\(.*?\)', '', line)
+        # 链接 [text](url) -> text
+        line = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', line)
+        # 行内代码 `code`
+        line = re.sub(r'`([^`]*)`', r'\1', line)
+        # 粗体/斜体标记 ** **, __ __, * *, _ _
+        line = re.sub(r'\*\*([^*]+)\*\*', r'\1', line)
+        line = re.sub(r'__([^_]+)__', r'\1', line)
+        line = re.sub(r'\*([^*]+)\*', r'\1', line)
+        line = re.sub(r'_([^_]+)_', r'\1', line)
+        # 删除线 ~~text~~
+        line = re.sub(r'~~([^~]+)~~', r'\1', line)
+
+        # 标题行 # ## ### ... -> 只保留文字
+        stripped = line.strip()
+        if re.match(r'^#{1,6}\s', stripped):
+            line = re.sub(r'^#{1,6}\s+', '', stripped)
+            result.append(line)
+            continue
+
+        # 水平线
+        if re.match(r'^[-*_]{3,}\s*$', stripped):
+            continue
+
+        # 引用块
+        if stripped.startswith('> '):
+            line = re.sub(r'^>\s?', '', stripped)
+            result.append(line)
+            continue
+
+        # 无序列表
+        if re.match(r'^[-*+]\s', stripped):
+            line = re.sub(r'^[-*+]\s+', '', stripped)
+            result.append(line)
+            continue
+
+        # 有序列表
+        if re.match(r'^\d+\.\s', stripped):
+            line = re.sub(r'^\d+\.\s+', '', stripped)
+            result.append(line)
+            continue
+
+        result.append(stripped if stripped else '')
+
+    return '\n'.join(result)
+
+
+def read_chapter_content(file_path: str) -> list:
+    """读取章节文件内容，支持 .txt 和 .md 格式。对于 .md 文件自动转换为纯文本。"""
+    with open(file_path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    if file_path.lower().endswith('.md'):
+        raw = md_to_plain_text(raw)
+
+    return raw.splitlines(keepends=True)
+
+
+def scan_chapter_files(sub_path: str) -> list:
+    """扫描目录下所有章节文件(.txt 和 .md)，按章节号排序。"""
+    txt_files = glob.glob(os.path.join(sub_path, "*.txt"))
+    md_files = glob.glob(os.path.join(sub_path, "*.md"))
+    return sorted(txt_files + md_files)
+
 # 番茄作家书籍管理首页
 BOOK_MANAGE_URL = "https://fanqienovel.com/main/writer/book-manage"
 
@@ -19,10 +91,12 @@ def main():
     
     # ============ 多部小说子目录管理 ============
     # 扫描 chapters/ 下所有子目录，每个子目录对应一本书
-    # 同时兼容旧模式：如果 chapters/ 根目录有散落的 txt 文件，提示用户归类
+    # 同时兼容旧模式：如果 chapters/ 根目录有散落的 txt/md 文件，提示用户归类
     root_txt_files = glob.glob(os.path.join(CHAPTERS_DIR, "*.txt"))
-    if root_txt_files:
-        print(f"\n[提示] 发现 chapters/ 根目录下有 {len(root_txt_files)} 个散落的 txt 文件。")
+    root_md_files = glob.glob(os.path.join(CHAPTERS_DIR, "*.md"))
+    root_scattered = root_txt_files + root_md_files
+    if root_scattered:
+        print(f"\n[提示] 发现 chapters/ 根目录下有 {len(root_scattered)} 个散落的文件(txt/md)。")
         print(f"       多部小说管理模式要求章节放在子目录中，例如：")
         print(f"         chapters/ai编程末日/101 第101章.txt")
         print(f"         chapters/青冥独行录/001 第1章.txt")
@@ -35,9 +109,9 @@ def main():
         for name in sorted(os.listdir(CHAPTERS_DIR)):
             sub_path = os.path.join(CHAPTERS_DIR, name)
             if os.path.isdir(sub_path):
-                txts = glob.glob(os.path.join(sub_path, "*.txt"))
-                if txts:
-                    book_dirs.append((name, sub_path, sorted(txts)))
+                chapter_files = scan_chapter_files(sub_path)
+                if chapter_files:
+                    book_dirs.append((name, sub_path, chapter_files))
     
     if not book_dirs:
         print(f"\n[{CHAPTERS_DIR}] 中没有找到任何待发章节！")
@@ -148,10 +222,14 @@ def main():
             
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
-                
+
             # 如果文件名里只写了 011 第11章.txt，没有真正的标题，我们就从文件正文第一行提取
+            # 对于 .md 文件，先把标题行的 markdown 语法洗掉再匹配
+            first_line_clean = lines[0].strip() if lines else ""
+            if first_line_clean.startswith('#') and file_path.lower().endswith('.md'):
+                first_line_clean = re.sub(r'^#{1,6}\s+', '', first_line_clean)
             if not chapter_title and lines:
-                m2 = re.search(r'第.*?章[\s：:]*(.*)', lines[0].strip())
+                m2 = re.search(r'第.*?章[\s：:]*(.*)', first_line_clean)
                 if m2:
                     chapter_title = m2.group(1).strip()
             if not chapter_title:
@@ -166,6 +244,10 @@ def main():
                 lines = lines[1:]
                 
             content = "".join(lines)
+
+            # 对于 .md 文件，将 Markdown 内容转换为纯文本后再注入编辑器
+            if file_path.lower().endswith('.md'):
+                content = md_to_plain_text(content)
                 
             try:
                 # 1. 每次都回到后台的【我的小说】列表页，彻底摆脱嵌套死循环迷宫
@@ -260,35 +342,32 @@ def main():
                 if len(context.pages) > original_pages:
                     editor_page = context.pages[-1]
                 
-                # 疯狂点击对付番茄弹出来的各种“功能上新”教学框、提示遮罩
+                # 疯狂点击对付番茄弹出来的各种"功能上新"教学框、提示遮罩
                 print(" -> 开始执行清道夫程序，极其凶狠地清除所有遮挡视野的新手教学卡片...")
                 for _ in range(3):
                     editor_page.keyboard.press("Escape")
                     editor_page.wait_for_timeout(200)
                 
-                # 终极空间坐标打击法：靠文字匹配容易失效（甚至有莫名其妙的空格），我们直接找屏幕上**所有**叫“下一步”或“完成”的按钮
-                # 如果它不在屏幕最顶端的标题栏（即 y 坐标 > 100），就断定它是该死的新手向导，通通点烂！
-                print(" -> 启动空间坐标精确打击！自动消灭所有不在天花板上的新手引导...")
+                # 清道夫: 清理新手引导弹窗
+                # 不含"下一步": 与顶部真实发布按钮文字相同，误触会提前跳转
+                print(' -> 启动引导弹窗清理...')
                 for _ in range(10):
                     clicked_guide = False
                     try:
-                        # 遍历常见的新手教学按钮文案
-                        for target_text in ["下一步", "完成", "我知道了", "跳过"]:
-                            # 获取这些按钮的底层 DOM 节点
+                        for target_text in ['完成', '我知道了', '跳过']:
                             btns = editor_page.get_by_text(target_text, exact=True).element_handles()
                             for btn in btns:
                                 box = btn.bounding_box()
-                                # 顶部的发布按钮极其靠上（通常 y 在20-60左右）。只要 y > 100，必是乱入的悬浮弹窗！
                                 if box and box['y'] > 100:
-                                    print(f"    - > 坐标 (y={int(box['y'])}) 拦截到流氓向导节点 '{target_text}'，击破！")
+                                    print(f'    -> 坐标(y={int(box["y"])}) 拦截到引导节点 {target_text!r}，击破！')
                                     btn.click()
                                     editor_page.wait_for_timeout(600)
                                     clicked_guide = True
                     except Exception as e:
                         pass
-                    
+
                     if not clicked_guide:
-                        break # 如果这一轮地毯式搜索没点任何非顶部按钮，代表弹窗彻底清扫干净了！
+                        break
                     
                 # 1.5 确认或切换分卷
                 if volume_num is not None and volume_num > 1:
@@ -414,30 +493,61 @@ def main():
                     editor = editor_page.locator('[contenteditable="true"]').first
                 
                 if editor.is_visible():
-                    editor.click(force=True)
-                    # 防止编辑器里默认带了换行或者空格
-                    editor_page.keyboard.press("Control+A")
-                    editor_page.keyboard.press("Backspace")
+                    handle = editor.element_handle()
+                    # 方案1: ClipboardEvent paste 模拟（ProseMirror 会走自己的 paste handler）
+                    editor_page.evaluate("""([el, text]) => {
+                        el.focus();
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                        const dt = new DataTransfer();
+                        dt.setData('text/plain', text);
+                        el.dispatchEvent(new ClipboardEvent('paste', {
+                            clipboardData: dt, bubbles: true, cancelable: true
+                        }));
+                    }""", [handle, content])
+                    editor_page.wait_for_timeout(800)
 
-                    # 一把梭子：将内容塞进编辑器，并触发浏览器的侦听网络，让数字统计动起来
-                    editor_page.evaluate("([el, text]) => { el.innerText = text; el.dispatchEvent(new Event('input', {bubbles: true})); }", [editor.element_handle(), content])
-                    
-                    editor.click()
-                    editor_page.keyboard.press("End")
-                    editor_page.keyboard.press("Space")
-                    page.wait_for_timeout(500)
-                    editor_page.keyboard.press("Backspace")
+                    # 验证注入，失败则降级 execCommand
+                    if not (editor.inner_text() or "").strip():
+                        editor_page.evaluate("""([el, text]) => {
+                            el.focus();
+                            document.execCommand('selectAll', false, null);
+                            document.execCommand('delete', false, null);
+                            document.execCommand('insertText', false, text);
+                        }""", [handle, content])
+                        editor_page.wait_for_timeout(500)
+
+                    # 最终兜底
+                    if not (editor.inner_text() or "").strip():
+                        editor_page.evaluate("""([el, text]) => {
+                            el.innerText = text;
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                            el.dispatchEvent(new Event('change', {bubbles: true}));
+                        }""", [handle, content])
                 else:
                     print("  [警告] 没找到正文的极其庞大的输入区域！")
                 
                 # 4. 点击【下一步】进行正式发布
                 print(" -> 点击右上角的【下一步】准备正式拔剑发布...")
-                # 排除可能还存在的新手引导的“下一步”，最后那个一定是顶部大按钮
+                # 排除可能还存在的新手引导的"下一步"，最后那个一定是顶部大按钮
                 next_btn = editor_page.get_by_text("下一步", exact=True).last
                 if next_btn.is_visible():
                     next_btn.click(force=True)
-                    # 我们需要等待这些“千层饼”弹窗出现而不是用 is_visible 瞬时判断
-                    
+                    editor_page.wait_for_timeout(2000)
+
+                    # 拦截：请选择内容检测方式 弹窗 → 选仅基础检测
+                    try:
+                        basic_btn = editor_page.get_by_text("仅基础检测", exact=True).first
+                        basic_btn.wait_for(state="visible", timeout=3000)
+                        basic_btn.click(force=True)
+                        print("    - 已选择【仅基础检测】")
+                        editor_page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
+
                     try:
                         # 闯关拦截 1：错别字未修改弹窗 -> 必须秒破
                         submit_typo_btn = editor_page.get_by_role("button", name="提交").first
@@ -445,7 +555,7 @@ def main():
                         submit_typo_btn.wait_for(state="visible", timeout=2000)
                         print("    - 触发错别字修改提示弹窗，直接无视并强制选择【提交】...")
                         submit_typo_btn.click(force=True)
-                        # 【重要修复】：等待错别字弹窗的消失动画彻底走完，防它的“取消”按钮干扰下一关
+                        # 【重要修复】：等待错别字弹窗的消失动画彻底走完，防它的"取消"按钮干扰下一关
                         editor_page.wait_for_timeout(1200)
                     except Exception:
                         pass
