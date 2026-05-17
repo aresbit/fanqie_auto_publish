@@ -1,134 +1,126 @@
-# Fanqie Auto Publish (番茄小说全自动发文机器人) 🍅🤖
+# fanqie-auto-publish
 
-这是一个基于 `Playwright` 的强大的番茄小说全自动网页端发文与状态管理自动化脚本。
-它能在完全无人值守的情况下，将本地批量的 `.txt` 章节文件精准投递并发布到番茄作家后台，且自带极其强悍的“断点续检”与“弹窗斩杀”机制。
+番茄小说自动发布工具，基于 Playwright 浏览器自动化，支持批量发布 `.md` / `.txt` 章节到番茄作家后台。
 
-运行方式
+---
 
-# GUI 版本（pywebview 窗口）
-uv run python main_webview.py
+## 环境要求
 
-# CLI 版本
-uv run python publish.py
+- Python 3.10+
+- Linux / macOS / Windows（Linux 需要 `DISPLAY` 环境变量指向 X11 显示）
+- uv（推荐）或 pip
 
-# 登录
-uv run python login.py
+---
 
-# 辅助脚本
-uv run python rename.py
-uv run python deai_process.py
-uv run python add_text.py
-uv run python convert_icon.py
-
-## 核心特性 ✨
-
-- **智能断点续传**：意外中断后重启脚本，不会傻傻地重复创建章节，而是会进入【章节管理】自动识别未完成的残片草稿并继续覆盖发布。
-- **神级弹窗斩杀器**：内置基于物理坐标（Y轴边界过滤）的霸道扫雷机制。不管是“新手引导 1/4”、还是“错别字警告”、“内容风险拦截”，都会被脚本瞬间点爆。
-- **强制合规声明**：在最终发布面板中，脚本能自动拦截并勾选“是否使用AI”的法定单选框，确保发布万无一失。
-- **多书隔离管理**：`chapters/` 下按书名建立子目录（如 `chapters/ai编程末日/`、`chapters/青冥独行录/`），脚本自动扫描并列出有待发章节的书籍，输入序号即可精准发布。发文成功后自动归档到 `uploaded/书名/` 下，多部小说章节永不混乱。
-- **自定义发布数量**：选择小说后可自行指定本次发布的章节数（直接回车发布全部，输入数字则只发布前 N 章），灵活应对番茄平台每日发布上限，未发章节保留原位待下次发布。
-- **封面贴字插件**：附带 `add_text.py` 脚本，可调用 `Pillow` 为 AI 生成的纯净封面图自动加上标准排版的极客风书名（应对审核不合格）。
-
-## 目录结构 📁
-
-_由于涉及个人隐私与作品版权，以下数据目录已被 `.gitignore` 保护，不会被上传：_
-
-```
-chapters/                    # 待发章节（按书名建子目录）
-  ├── ai编程末日/
-  │     ├── 101 第101章.txt
-  │     └── 102 第102章.txt
-  └── 青冥独行录/
-        ├── 001 第1章.txt
-        └── 002 第2章.txt
-uploaded/                    # 已发布归档（自动按书名隔离）
-  ├── ai编程末日/
-  └── 青冥独行录/
-images/                      # 封面原图
-docx/                        # 大纲、策划文档
-```
-
-> **注意**：章节 txt 文件不要直接散放在 `chapters/` 根目录下，必须放在对应书名的子目录中。脚本会自动检测并提示。
-
-## 快速开始 🚀
-
-### 1. 安装依赖
+## 安装
 
 ```bash
-# 安装核心依赖
-pip install playwright pillow
+git clone https://github.com/aresbit/fanqie_auto_publish.git
+cd fanqie_auto_publish
 
-# 下载 Playwright 需要的内置 Chromium 浏览器内核
+# 安装依赖
+uv sync
+# 或: pip install -r requirements.txt
+
+# 安装 Chromium
 playwright install chromium
 ```
 
-### 2. 扫码登录 (仅需一次)
+---
 
-第一次使用前，必须先获取您的番茄平台登录状态（Cookie）：
-
-```bash
-python login.py
-```
-
-这会弹出一个浏览器界面。请在里面手动进行扫码登录番茄作家后台。
-登录成功后关闭浏览器，目录下会自动生成一个非常重要的隐私状态文件 `state.json`（已被忽略上传）。
-
-### 3. 全自动轰炸式发文
-
-在 `chapters/` 下按书名创建子目录，将对应的 txt 章节放入：
+## 登录（首次，仅需一次）
 
 ```bash
-# 示例：为两本书分别准备章节
-mkdir chapters/我的第一本书
-mkdir chapters/我的第二本书
-# 然后把 txt 文件分别放进去
+DISPLAY=:0 uv run python login.py
 ```
 
-一键执行大魔王：
-
-```bash
-python publish.py
-```
-
-脚本会自动扫描并列出所有有待发章节的书籍：
-
-```
-检测到以下小说有待发章节：
-
-  [1] 我的第一本书  （5 章待发）
-  [2] 我的第二本书  （3 章待发）
-
->>> 请输入序号选择要发布的小说：
-```
-
-输入序号后，脚本会进一步询问本次要发布的章节数量：
-
-```
-已选择：【我的第一本书】，共 5 章待发
-==================================================
-
->>> 请输入本次要发布的章节数量（1-5），直接回车则发布全部：
-```
-
-- **直接按回车**：发布该小说所有待发章节
-- **输入数字**（如 `3`）：只发布排序最靠前的 3 章，剩余章节保留待下次发布
-
-这样就可以灵活控制每次的发布量，完美应对番茄平台的每日发布上限。输入完毕后就可以双手离开键盘，喝着咖啡欣赏它像一个没有感情的打字机般疯狂投递了。
+浏览器弹出后在页面内完成登录，回到终端按回车。登录状态保存到 `state.json`（已加入 `.gitignore`）。
 
 ---
 
-## 交流与支持 💬
+## 章节目录结构
 
-如果在自动化发文途中遇到了平台规则更新或环境报错，亦或者想要交流 AI 写小说的最新干货技巧，欢迎加入我们的**专属讨论阵地**：
-👉 **[点击链接加入群聊【AI交流群】](https://qm.qq.com/q/YBb6naAOcM)**
+```
+chapters/
+└── 书名/
+    ├── 001 第1章 章节标题.md
+    ├── 002 第2章 章节标题.md
+    └── ...
+uploaded/
+└── 书名/          # 发布成功后自动归档到此
+```
 
-如果这个超神自动化工具真正帮您解放了双手，帮您顺利度过了新手期并拿到了全勤和首秀打赏，欢迎请作者喝一杯防猝死的冰美式！您的所有充电和支持，都是本脚本持续对抗番茄防线更新的最强核动力！☕️🔋
-
-<div align="center">
-  <img src="https://anta.obs.cn-south-1.myhuaweicloud.com/IMG_0897.JPG" width="250" height="auto" style="margin-right: 20px" alt="微信赞赏码">
-  <img src="https://anta.obs.cn-south-1.myhuaweicloud.com/IMG_0896.JPG" width="250" height="auto" alt="其它打赏码">
-</div>
+- 支持 `.md` 和 `.txt`，`.md` 发布时自动去除 Markdown 语法
+- 文件名前缀数字决定发布顺序
 
 ---
 
-**⚠️ 免责声明**：本脚本纯属技术交流与自动化接口研究。因平台规则随时可能更新，请时刻留意 UI 变动。不要用作恶意批量发布垃圾内容。
+## 批量发布（推荐）
+
+编辑 `batch_publish.py` 顶部三个常量：
+
+```python
+CHAPTER_DIR = "/path/to/chapters/书名"
+ARCHIVE_DIR = "/path/to/chapters/uploaded/书名"
+BOOK_ID     = "7640498714590579774"   # 番茄后台 URL 中的数字 ID
+```
+
+运行：
+
+```bash
+DISPLAY=:0 uv run python batch_publish.py              # 发布全部
+DISPLAY=:0 uv run python batch_publish.py --count 5    # 只发布前 5 章
+DISPLAY=:0 uv run python batch_publish.py --headless   # 无头模式
+```
+
+发布成功的章节自动移入 `ARCHIVE_DIR`，失败的保留在 `CHAPTER_DIR` 可直接重跑。
+
+---
+
+## 获取 BOOK_ID
+
+打开番茄作家后台，进入书籍管理页，从 URL 中提取数字 ID：
+
+```
+https://fanqienovel.com/main/writer/7640498714590579774/manage/
+```
+
+---
+
+## 其他脚本
+
+| 脚本 | 用途 |
+|---|---|
+| `login.py` | 获取登录 Cookie |
+| `publish.py` | 交互式 CLI 发布（多书选择） |
+| `main_webview.py` | GUI 窗口版本（pywebview） |
+| `rename.py` | 章节文件批量重命名 |
+| `deai_process.py` | 去 AI 味文本处理 |
+| `add_text.py` | 封面图加书名文字（Pillow） |
+| `mcp_server.py` | MCP 服务，供 AI Agent 调用 |
+
+---
+
+## MCP 集成
+
+在 Claude Code 的 `.mcp.json` 中添加：
+
+```json
+{
+  "mcpServers": {
+    "fanqie-publish": {
+      "command": "uv",
+      "args": ["run", "python", "mcp_server.py"],
+      "cwd": "/path/to/fanqie_auto_publish"
+    }
+  }
+}
+```
+
+加载 `fanqie-publish` skill 后可通过对话直接触发发布流程。
+
+---
+
+## 免责声明
+
+本项目仅供技术研究与个人自动化使用，请遵守番茄小说平台相关规则。
