@@ -11,9 +11,9 @@ from mcp_server import md_to_plain_text
 from playwright.sync_api import sync_playwright
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
-CHAPTER_DIR = "/home/ares/ares/llm/novel-workspace/chapters/大道言灵"
-ARCHIVE_DIR = "/home/ares/ares/llm/novel-workspace/chapters/uploaded/大道言灵"
-BOOK_ID = "7640498714590579774"
+CHAPTER_DIR = "/home/ares/yys/在盐边/chapters"
+ARCHIVE_DIR = "/home/ares/yys/在盐边/chapters/uploaded"
+BOOK_ID = "7643283052042390552"
 PUBLISH_URL = f"https://fanqienovel.com/main/writer/{BOOK_ID}/publish/"
 
 # 番茄审核时间提示
@@ -25,13 +25,19 @@ def read_chapter(filepath):
         content = f.read()
     filename = os.path.basename(filepath)
     raw_title = os.path.splitext(filename)[0]
-    m = re.search(r'第\s*(\d+)\s*章[\s_]*(.*)', raw_title)
-    chapter_num = m.group(1) if m else "0"
-    chapter_title = m.group(2).strip() if m else raw_title
 
-    # Remove heading line from body
+    # Extract chapter number from leading digits (e.g., "01-闷" → "1")
+    num_m = re.search(r'^(\d+)', raw_title)
+    chapter_num = str(int(num_m.group(1))) if num_m else "0"
+
+    # Extract chapter title from content heading line (handles Chinese numerals)
     lines = content.split('\n')
+    chapter_title = raw_title  # fallback
     if lines and lines[0].startswith('#'):
+        heading_line = lines[0].lstrip('#').strip()
+        hm = re.search(r'第\s*[一二三四五六七八九十百千\d]+\s*章\s*(.*)', heading_line)
+        if hm:
+            chapter_title = hm.group(1).strip()
         lines = lines[1:]
     while lines and not lines[0].strip():
         lines = lines[1:]
@@ -110,48 +116,53 @@ def publish_one_chapter(page, chapter_num, chapter_title, chapter_body):
 
     # Navigate to fresh publish page
     page.goto(PUBLISH_URL, timeout=30000)
-    page.wait_for_timeout(3000)
+    page.wait_for_timeout(5000)  # 首次访问需要更长时间加载
 
-    # Dismiss popups
-    for _ in range(5):
-        page.keyboard.press("Escape")
-        page.wait_for_timeout(200)
-
-    # Dismiss guide dialogs
-    for _ in range(10):
+    # Aggressive popup/wizard dismissal (critical for first-time visit)
+    for _ in range(20):
         dismissed = False
-        for target in ["知道了", "跳过", "完成", "下一步"]:
+        # ESC first
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(100)
+        for target in ["知道了", "跳过", "完成", "下一步", "我知道了", "确认", "关闭",
+                        "继续", "新建章节", "创建第一章", "好的", "开始使用"]:
             try:
                 btn = page.get_by_text(target, exact=True).first
-                if btn.is_visible(timeout=500):
-                    btn.click(force=True)
-                    page.wait_for_timeout(400)
-                    dismissed = True
-            except:
-                pass
-        if not dismissed:
-            break
-
-    page.wait_for_timeout(500)
-
-    # 处理"基础检测"及其他平台弹窗（必须在填写内容之前关闭）
-    for _ in range(5):
-        dismissed = False
-        for dismiss_text in ["我知道了", "知道了", "确认", "关闭", "跳过", "完成", "继续"]:
-            try:
-                btn = page.get_by_text(dismiss_text, exact=True).first
                 if btn.is_visible(timeout=400):
                     btn.click(force=True)
-                    page.wait_for_timeout(600)
+                    page.wait_for_timeout(500)
                     dismissed = True
-                    print(f"  Dismissed popup: [{dismiss_text}]")
+                    print(f"  Dismissed: [{target}]")
                     break
             except:
                 pass
         if not dismissed:
             break
 
-    page.wait_for_timeout(500)
+    # Wait for editor to appear (ProseMirror or contenteditable)
+    editor_ready = False
+    for selector in ['.ProseMirror', '[contenteditable="true"]']:
+        try:
+            page.wait_for_selector(selector, timeout=10000)
+            editor_ready = True
+            break
+        except:
+            pass
+
+    if not editor_ready:
+        # Final attempt: check if there's a "create" flow to click through
+        for create_text in ["新建章节", "创建第一章", "写一章", "开始创作"]:
+            try:
+                btn = page.get_by_text(create_text, exact=False).first
+                if btn.is_visible(timeout=1000):
+                    btn.click(force=True)
+                    page.wait_for_timeout(3000)
+                    page.wait_for_selector('.ProseMirror', timeout=10000)
+                    editor_ready = True
+                    print(f"  Clicked [{create_text}] to enter editor")
+                    break
+            except:
+                pass
 
     # Fill chapter number
     num_input = page.locator('input').first
@@ -196,19 +207,19 @@ def publish_one_chapter(page, chapter_num, chapter_title, chapter_body):
             break
 
     # Fill content (ProseMirror editor)
+    if not editor_ready:
+        print(f"  [#{chapter_num}] ERROR: Editor still not found after retries!")
+        return False
+
     editor = page.locator('.ProseMirror').first
     if not editor.is_visible():
         editor = page.locator('[contenteditable="true"]').first
 
-    if editor.is_visible():
-        ok = inject_content_to_editor(page, editor, chapter_body)
-        if ok:
-            print(f"  [#{chapter_num}] Injected content ({len(chapter_body)} chars)")
-        else:
-            print(f"  [#{chapter_num}] WARNING: content injection may have failed")
+    ok = inject_content_to_editor(page, editor, chapter_body)
+    if ok:
+        print(f"  [#{chapter_num}] Injected content ({len(chapter_body)} chars)")
     else:
-        print(f"  [#{chapter_num}] ERROR: Editor not found!")
-        return False
+        print(f"  [#{chapter_num}] WARNING: content injection may have failed")
 
     # 点击顶部真实的【下一步】发布按钮（y < 100），避免误点侧边面板里的同名按钮
     next_btn = None
@@ -236,9 +247,9 @@ def publish_one_chapter(page, chapter_num, chapter_title, chapter_body):
             return True
         return False
 
-    # Handle confirmation flow — 最长等待 30 秒
+    # Handle confirmation flow — 最长等待 40 秒
     published = False
-    for attempt in range(30):
+    for attempt in range(40):
         body_text = page.inner_text('body')
 
         # 已发布成功 → 直接返回
@@ -250,30 +261,36 @@ def publish_one_chapter(page, chapter_num, chapter_title, chapter_body):
         # 内容检测方式弹窗 → 选"仅基础检测"（在错别字提交后才出现）
         try:
             basic_btn = page.get_by_text("仅基础检测", exact=True).first
-            if basic_btn.is_visible(timeout=300):
+            if basic_btn.is_visible(timeout=500):
                 basic_btn.click(force=True)
                 print(f"  [#{chapter_num}] Selected 仅基础检测")
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(2500)
                 continue
         except:
             pass
 
-        # AI声明 → 选择"否"
+        # AI声明 → 选择"否" (多种匹配方式)
         try:
-            ai_no = page.get_by_text("否", exact=True).first
-            if ai_no.is_visible(timeout=300):
-                ai_no.click(force=True)
-                page.wait_for_timeout(400)
+            for no_sel in [page.get_by_text("否", exact=True).first,
+                           page.get_by_role("button", name="否").first]:
+                try:
+                    if no_sel.is_visible(timeout=500):
+                        no_sel.click(force=True)
+                        print(f"  [#{chapter_num}] Clicked AI声明 [否]")
+                        page.wait_for_timeout(800)
+                        break
+                except:
+                    pass
         except:
             pass
 
         # 确认发布 (多种可能文案)
-        for confirm_text in ["确认发布", "立即发布", "发布"]:
+        for confirm_text in ["确认发布", "立即发布", "发布", "发布章节", "确定发布", "确认并发布"]:
             try:
                 btn = page.get_by_role("button", name=confirm_text).first
-                if not btn.is_visible(timeout=200):
+                if not btn.is_visible(timeout=400):
                     btn = page.get_by_text(confirm_text, exact=True).first
-                if btn.is_visible(timeout=200) and btn.is_enabled():
+                if btn.is_visible(timeout=400) and btn.is_enabled():
                     btn.click(force=True)
                     print(f"  [#{chapter_num}] Clicked [{confirm_text}]")
                     page.wait_for_timeout(3000)
@@ -288,12 +305,12 @@ def publish_one_chapter(page, chapter_num, chapter_title, chapter_body):
         for popup_text in ["提交", "继续发布", "我知道了", "确认"]:
             try:
                 p_btn = page.get_by_role("button", name=popup_text).last
-                if not p_btn.is_visible(timeout=200):
+                if not p_btn.is_visible(timeout=400):
                     p_btn = page.get_by_text(popup_text, exact=True).last
-                if p_btn.is_visible(timeout=200) and p_btn.is_enabled():
+                if p_btn.is_visible(timeout=400) and p_btn.is_enabled():
                     p_btn.click(force=True)
                     print(f"  [#{chapter_num}] Handled popup [{popup_text}]")
-                    page.wait_for_timeout(800)
+                    page.wait_for_timeout(1000)
                     break
             except:
                 pass
@@ -306,7 +323,9 @@ def publish_one_chapter(page, chapter_num, chapter_title, chapter_body):
             print(f"  [#{chapter_num}] ✅ PUBLISHED!")
             published = True
         else:
+            # Debug: print visible dialog text
             print(f"  [#{chapter_num}] ⚠️  未找到确认发布按钮，章节可能在草稿状态")
+            print(f"  [#{chapter_num}] DEBUG body snippet: {body_text[:500]}")
 
     return published
 
@@ -361,6 +380,13 @@ def main():
 
             print(f"\n--- [{i+1}/{len(chapters)}] 第{ch_num}章 {ch_title} ---")
 
+            # Health check: recreate page if closed
+            try:
+                page.evaluate("1")
+            except Exception:
+                print("  Page closed, creating new page...")
+                page = context.new_page()
+
             try:
                 ok = publish_one_chapter(page, ch_num, ch_title, ch_body)
 
@@ -372,17 +398,23 @@ def main():
                     results.append(f"✅ 第{ch_num}章 {ch_title}")
                 else:
                     results.append(f"❌ 第{ch_num}章 {ch_title} - 发布失败")
-                    # Ask whether to continue
-                    print("  Continue with next chapter? (will continue automatically in 10s)")
+                    print("  Will continue to next chapter automatically...")
 
             except Exception as e:
                 print(f"  ❌ CRASH: {e}")
                 results.append(f"💥 第{ch_num}章 {ch_title} - {e}")
-                # Continue to next chapter on crash
-                page.wait_for_timeout(2000)
+                # Recreate page on crash and continue
+                try:
+                    page = context.new_page()
+                    print("  Created new page, continuing...")
+                except Exception:
+                    print("  WARNING: Could not create new page")
 
-            # Brief pause between chapters
-            page.wait_for_timeout(2000)
+            # Brief pause between chapters (only if page is alive)
+            try:
+                page.wait_for_timeout(2000)
+            except Exception:
+                pass
 
         browser.close()
 
